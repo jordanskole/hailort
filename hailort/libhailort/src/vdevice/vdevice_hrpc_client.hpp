@@ -40,6 +40,8 @@ public:
         const std::string &name = "") override;
     virtual Expected<std::shared_ptr<InferModel>> create_infer_model(const MemoryView hef_buffer,
         const std::string &name = "") override;
+    virtual Expected<std::shared_ptr<InferModel>> create_infer_model(std::shared_ptr<Buffer> hef_buffer,
+        const std::string &name = "") override;
     virtual Expected<ConfiguredNetworkGroupVector> configure(Hef &hef, const NetworkGroupsParamsMap &configure_params={}) override;
     virtual Expected<std::vector<std::reference_wrapper<Device>>> get_physical_devices() const override;
     virtual Expected<std::vector<std::string>> get_physical_devices_ids() const override;
@@ -81,6 +83,10 @@ public:
         return make_unexpected(HAILO_NOT_IMPLEMENTED);
     }
     virtual Expected<std::shared_ptr<InferModel>> create_infer_model(const MemoryView, const std::string &) override
+    {
+        return make_unexpected(HAILO_NOT_IMPLEMENTED);
+    }
+    virtual Expected<std::shared_ptr<InferModel>> create_infer_model(std::shared_ptr<Buffer>, const std::string &) override
     {
         return make_unexpected(HAILO_NOT_IMPLEMENTED);
     }

@@ -154,6 +154,26 @@ Expected<std::shared_ptr<InferModel>> VDeviceHrpcClient::create_infer_model(cons
     return std::shared_ptr<InferModel>(std::move(infer_model));
 }
 
+Expected<std::shared_ptr<InferModel>> VDeviceHrpcClient::create_infer_model(std::shared_ptr<Buffer> hef_buffer,
+    const std::string &name)
+{
+    // Same as the MemoryView overload, but keeps the caller's buffer instead of
+    // duplicating it: Hef::create(MemoryView) copies the whole HEF, which for a
+    // multi-GB LLM is the difference between fitting in host memory and not.
+    TRY(auto request_buffer, m_client->allocate_request_buffer(), "Failed to allocate request buffer");
+
+    TRY(auto request_size, CreateInferModelSerializer::serialize_request(m_handle, hef_buffer->size(), name, MemoryView(*request_buffer)));
+    TRY(auto result, m_client->execute_request(static_cast<uint32_t>(HailoRpcActionID::VDEVICE__CREATE_INFER_MODEL),
+        MemoryView(request_buffer->data(), request_size), std::vector<TransferBuffer>{MemoryView(*hef_buffer)}, {}, LONG_RPC_ACTION_TIMEOUT));
+    TRY(auto infer_model_handle, CreateInferModelSerializer::deserialize_reply(MemoryView(result.body.data(), result.header.size)));
+
+    TRY(auto hef, Hef::create(hef_buffer));
+    TRY(auto infer_model, InferModelHrpcClient::create(std::move(hef), name, m_client, infer_model_handle, m_handle,
+        *this, m_callback_dispatcher_manager));
+
+    return std::shared_ptr<InferModel>(std::move(infer_model));
+}
+
 Expected<std::shared_ptr<InferModel>> VDeviceHrpcClient::create_infer_model(const std::string &hef_path, const std::string &name)
 {
     FileReader hef_reader(hef_path);

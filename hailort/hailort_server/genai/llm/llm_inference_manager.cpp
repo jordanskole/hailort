@@ -29,9 +29,12 @@ Expected<std::unique_ptr<InferenceManager>> LLMInferenceManager::create(std::sha
         }
     }
     CHECK(!model_name.empty(), HAILO_INTERNAL_FAILURE, "Model doesnt have NG with name-suffix '{}'", model_name_suffix);
-    // Use MemoryView overload to ensure VDeviceHrpcClient creates InferModelHrpcClient
-    // (the Hef overload falls through to the base class on SOC_ACCELERATOR devices)
-    TRY(auto model, vdevice->create_infer_model(MemoryView(*hef_buffer), model_name));
+    // Pass the owning buffer, not the Hef: the Hef overload is not overridden by
+    // VDeviceHrpcClient, so on SOC_ACCELERATOR it falls through to the base class
+    // and yields an unusable InferModelBase. The shared_ptr<Buffer> overload
+    // routes to InferModelHrpcClient without duplicating the HEF the way the
+    // MemoryView one does.
+    TRY(auto model, vdevice->create_infer_model(hef_buffer, model_name));
 
     model->set_enable_kv_cache(true);
 

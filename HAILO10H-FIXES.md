@@ -1,6 +1,6 @@
 # HailoRT GenAI Server Fixes for Hailo-10H (SOC_ACCELERATOR)
 
-These changes fix three bugs in the GenAI server that prevent LLM inference from working on Hailo-10H devices (SOC_ACCELERATOR type, e.g. Hailo-10H M.2 on Raspberry Pi 5).
+These changes fix four bugs that prevent LLM inference from working on Hailo-10H devices (SOC_ACCELERATOR type, e.g. Hailo-10H M.2 on Raspberry Pi 5).
 
 Base version: HailoRT v5.3.0 (`d503417`)
 
@@ -57,6 +57,38 @@ The HEF buffer is freed, leaving the `TokenEmbedder`'s `Eigen::Map` as a danglin
 - `hailort/hailort_server/genai/vlm/vlm_server.cpp` — same fix for VLM
 
 **Note:** This bug affects all device types, not just Hailo-10H. It is a latent use-after-free that may appear to work on some platforms due to the freed memory not being immediately reclaimed.
+
+## Bug 4: the HEF is duplicated once per inference model (OOM on 8 GB hosts)
+
+**Symptom:** `hailort_server` is OOM-killed while loading a large LLM. With `Qwen3-1.7B-Instruct`
+(2.9 GB HEF) on an 8 GB Raspberry Pi 5, host memory climbs steadily to ~3.4 GB during the HEF read,
+then jumps to ~7.8 GB in about ten seconds and the kernel kills the process.
+
+**Root cause:** the fix for Bug 1 routes through `create_infer_model(MemoryView, name)`, and that
+overload calls `Hef::create(const MemoryView &)`, which does
+`Buffer::create_shared(hef_buffer.data(), hef_buffer.size(), ...)` — a full copy of the HEF.
+`LLMServer` creates two inference models (prefill and token-by-token) from the same buffer, so the
+peak is three copies: the one the server read from disk plus one per `create_infer_model` call. At
+2.9 GB each that is 8.6 GB, which does not fit in 8 GB.
+
+There is already a non-copying `Hef::create(std::shared_ptr<Buffer>)`, but `VDeviceHrpcClient` never
+overrides the matching `create_infer_model(std::shared_ptr<Buffer>, const std::string &)`, so that
+path falls through to the base class and hits Bug 1 all over again.
+
+**Fix:** override `create_infer_model(std::shared_ptr<Buffer>, const std::string &)` in
+`VDeviceHrpcClient` — same body as the `MemoryView` overload, but it keeps the caller's buffer via
+`Hef::create(hef_buffer)` instead of duplicating it — and call that from `LLMInferenceManager`.
+Peak host memory for `Qwen3-1.7B-Instruct` drops from >7.8 GB (OOM) to 3.4 GB.
+
+**Files changed:**
+- `hailort/libhailort/src/vdevice/vdevice_hrpc_client.hpp` — declare the override (plus the matching
+  `HAILO_NOT_IMPLEMENTED` stub on `VDeviceSocketBasedClient`, for consistency with its siblings)
+- `hailort/libhailort/src/vdevice/vdevice_hrpc_client.cpp` — implement it
+- `hailort/hailort_server/genai/llm/llm_inference_manager.cpp` — use it instead of the `MemoryView`
+  overload
+
+**Note:** like Bug 3, this is not Hailo-10H specific in principle — any HRPC-client device loading a
+large HEF pays the same duplication. It is just that LLM-sized HEFs are where it becomes fatal.
 
 ## Build
 
